@@ -66,6 +66,7 @@ class Scheduler:
         tasks_per_minute: int | None,
         lora_name: str | None = None,
         deferred_group_scoring_tasks: set[str] | None = None,
+        state_columns: list[str] | None = None,
     ):
         self.logger = get_logger()
         if tasks_per_minute is not None:
@@ -87,6 +88,7 @@ class Scheduler:
         self.sampling_args = get_sampling_args(config.sampling, temperature=initial_temp)
         self.model_name = self.config.model.name
         self.json_logging = config.log.json_logging
+        self.state_columns = state_columns or []
 
         # Inference pool - used for admin operations (adapter sync) and metrics
         self.inference_pool = inference_pool
@@ -187,6 +189,7 @@ class Scheduler:
                 model_name=self.model_name,
                 sampling_args=self.sampling_args,
                 max_retries=0,  # TODO: make configurable
+                state_columns=self.state_columns,
             )
         )
         self.inflight_requests[run_rollout_task] = InflightRolloutInfo(

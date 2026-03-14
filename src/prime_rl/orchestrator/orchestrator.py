@@ -34,6 +34,7 @@ from prime_rl.orchestrator.eval_utils import evaluate_env
 from prime_rl.orchestrator.filters import apply_filters, setup_filters
 from prime_rl.orchestrator.scheduler import Scheduler
 from prime_rl.orchestrator.utils import (
+    build_self_distillation_batch,
     compute_teacher_logprobs,
     get_sampling_args,
     get_weight_dir,
@@ -170,6 +171,17 @@ async def orchestrate(config: OrchestratorConfig):
         env_names=train_env_names,
         map_kwargs=dict(writer_batch_size=1),  # set defensively to not error on map operations on large datasets
     )
+    training_state_columns = sorted({column for env_config in config.env for column in env_config.state_columns})
+    if config.self_distillation is not None:
+        training_state_columns = sorted(
+            set(training_state_columns)
+            | {config.self_distillation.prompt_messages_state_key, config.self_distillation.solution_state_key}
+            | ({config.self_distillation.feedback_state_key} if config.self_distillation.include_environment_feedback else set())
+        )
+        logger.info(
+            "Self-distillation enabled with state columns: "
+            + ", ".join(training_state_columns)
+        )
     verification_enabled = config.verification.enabled
 
     train_env_deferred_group_scoring_tasks = (
@@ -300,6 +312,7 @@ async def orchestrate(config: OrchestratorConfig):
         tasks_per_minute=config.tasks_per_minute,
         lora_name=config.model.lora.name if config.model.lora else None,
         deferred_group_scoring_tasks=train_env_deferred_group_scoring_tasks,
+        state_columns=training_state_columns,
         config=config,
     )
 
@@ -531,6 +544,7 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Collect results and assign advantages
         train_examples: list[TrainingSample] = []
+        rollout_to_sample_indices: list[list[int]] = []
         rollout_prefill_lens: list[int] = []
         rollout_decode_lens: list[int] = []
         rollout_samples_per_rollout: list[int] = []
@@ -539,6 +553,7 @@ async def orchestrate(config: OrchestratorConfig):
         for rollout, advantage, samples in zip(train_rollouts, advantages, results):
             rollout_prefill_tokens = 0
             rollout_decode_tokens = 0
+            sample_indices_for_rollout: list[int] = []
             if samples is not None:
                 rollout_samples_per_rollout.append(len(samples))
                 for sample in samples:
@@ -548,9 +563,11 @@ async def orchestrate(config: OrchestratorConfig):
                     sample_prefill_tokens = len(sample.prompt_ids) + len(sample.completion_mask) - sample_decode_tokens
                     rollout_decode_tokens += sample_decode_tokens
                     rollout_prefill_tokens += sample_prefill_tokens
+                    sample_indices_for_rollout.append(len(train_examples))
                     train_examples.append(sample)
             else:
                 rollout_samples_per_rollout.append(0)
+            rollout_to_sample_indices.append(sample_indices_for_rollout)
             rollout_prefill_lens.append(rollout_prefill_tokens)
             rollout_decode_lens.append(rollout_decode_tokens)
             num_prefill_tokens += rollout_prefill_tokens
@@ -564,7 +581,32 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Compute teacher logprobs if teacher model is configured
         teacher_logprobs_time = 0
-        if config.teacher_model and teacher_inference_pool:
+        self_distillation_metrics: dict[str, float] = {}
+        if config.self_distillation is not None:
+            self_distillation_batch = build_self_distillation_batch(
+                tokenizer=tokenizer,
+                rollouts=train_rollouts,
+                rollout_to_sample_indices=rollout_to_sample_indices,
+                config=config.self_distillation,
+            )
+            self_distillation_metrics = self_distillation_batch.metrics
+            if self_distillation_batch.sample_indices:
+                logger.info(
+                    f"Computing self-distillation teacher logprobs for {len(self_distillation_batch.sample_indices)} training examples"
+                )
+                teacher_logprobs_start_time = time.perf_counter()
+                selected_samples = [train_examples[index] for index in self_distillation_batch.sample_indices]
+                teacher_logprobs_list = await compute_teacher_logprobs(
+                    clients=inference_pool.clients,
+                    model_name=scheduler.model_name,
+                    samples=selected_samples,
+                    teacher_prompt_ids=self_distillation_batch.teacher_prompt_ids,
+                )
+                for sample_index, teacher_logprobs in zip(self_distillation_batch.sample_indices, teacher_logprobs_list):
+                    train_examples[sample_index].teacher_logprobs = teacher_logprobs
+                teacher_logprobs_time = time.perf_counter() - teacher_logprobs_start_time
+                logger.debug(f"Computed self-distillation teacher logprobs in {teacher_logprobs_time:.2f}s")
+        elif config.teacher_model and teacher_inference_pool:
             logger.info(f"Computing teacher logprobs for {len(train_examples)} training examples")
             teacher_logprobs_start_time = time.perf_counter()
             teacher_logprobs_list = await compute_teacher_logprobs(
@@ -728,6 +770,8 @@ async def orchestrate(config: OrchestratorConfig):
             **scheduler.get_metrics(),
             # Buffer metrics
             **buffer.get_metrics(),
+            # Self-distillation metrics
+            **self_distillation_metrics,
             # Event loop lag metrics
             **event_loop_lag_monitor.get_metrics(),
             # Rollout filter metrics

@@ -287,6 +287,12 @@ class EnvConfig(BaseConfig):
             ),
         ),
     ] = {}
+    state_columns: Annotated[
+        list[str],
+        Field(
+            description="Additional rollout state columns to request from the environment for each training rollout."
+        ),
+    ] = []
 
 
 class EvalEnvConfig(EnvConfig):
@@ -647,6 +653,95 @@ class TeacherModelConfig(BaseConfig):
     ] = ModelConfig()
 
 
+class SelfDistillationConfig(BaseConfig):
+    """Configures feedback-conditioned self-distillation on rollout completions."""
+
+    prompt_messages_state_key: Annotated[
+        str,
+        Field(
+            description="Rollout state key containing the original prompt messages shown to the policy."
+        ),
+    ] = "prompt_messages"
+
+    solution_state_key: Annotated[
+        str,
+        Field(
+            description="Rollout state key containing a successful completion artifact that can be reused as a demonstration."
+        ),
+    ] = "generated_rubric"
+
+    feedback_state_key: Annotated[
+        str,
+        Field(
+            description="Rollout state key containing textual environment feedback for failed or weak rollouts."
+        ),
+    ] = "feedback"
+
+    success_reward_threshold: Annotated[
+        float,
+        Field(
+            description="Minimum rollout reward that counts as a successful demonstration for self-distillation."
+        ),
+    ] = 1.0
+
+    include_environment_feedback: Annotated[
+        bool,
+        Field(
+            description="Whether to include environment feedback in the teacher reprompt when it is available."
+        ),
+    ] = True
+
+    environment_feedback_only_without_solution: Annotated[
+        bool,
+        Field(
+            description="If True, only include environment feedback when no successful demonstration is available."
+        ),
+    ] = False
+
+    dont_reprompt_on_self_success: Annotated[
+        bool,
+        Field(
+            description="If True, exclude the sample's own successful completion when choosing a demonstration."
+        ),
+    ] = False
+
+    max_reprompt_len: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Maximum tokenized prompt length for the reprompted teacher context."
+        ),
+    ] = 8192
+
+    reprompt_truncation: Annotated[
+        Literal["left", "right"],
+        Field(
+            description="Which side to truncate when the reprompted teacher context exceeds max_reprompt_len."
+        ),
+    ] = "right"
+
+    reprompt_template: Annotated[
+        str,
+        Field(
+            description="Template for the teacher reprompt. Available placeholders: {prompt}, {solution}, {feedback}."
+        ),
+    ] = "{prompt}{solution}{feedback}"
+
+    solution_template: Annotated[
+        str,
+        Field(
+            description="Template used to render a successful demonstration. Available placeholder: {successful_previous_attempt}."
+        ),
+    ] = "\n\nSuccessful previous rubric:\n{successful_previous_attempt}\n"
+
+    feedback_template: Annotated[
+        str,
+        Field(
+            description="Template used to render environment feedback. Available placeholder: {feedback_raw}."
+        ),
+    ] = "\n\nFeedback from the rollout outcome:\n{feedback_raw}\n"
+
+
 class OrchestratorConfig(BaseConfig):
     """Configures the orchestrator for RL training."""
 
@@ -666,6 +761,14 @@ class OrchestratorConfig(BaseConfig):
             description="The teacher model configuration for computing teacher logprobs (e.g. for distillation). "
             "If provided, teacher logprobs will be computed using the specified model. "
             "If None, no teacher model will be used."
+        ),
+    ] = None
+
+    # The self-distillation configuration (optional)
+    self_distillation: Annotated[
+        SelfDistillationConfig | None,
+        Field(
+            description="Feedback-conditioned self-distillation configuration. If provided, reprompted teacher logprobs are computed from the current policy using rollout feedback and successful demonstrations."
         ),
     ] = None
 

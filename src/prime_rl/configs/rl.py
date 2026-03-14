@@ -319,10 +319,11 @@ class RLConfig(BaseConfig):
     def validate_teacher_model(self):
         if (
             self.trainer.loss.type == "default" and self.trainer.loss.teacher_tau > 0
-        ) and not self.orchestrator.teacher_model:
+        ) and not (self.orchestrator.teacher_model or self.orchestrator.self_distillation):
             raise ValueError(
                 "teacher_model must be configured when teacher_tau > 0. "
-                "Either set teacher_tau = 0, set deployment.num_teacher_gpus, or configure teacher_model manually."
+                "Either set teacher_tau = 0, set deployment.num_teacher_gpus, configure teacher_model manually, "
+                "or enable orchestrator.self_distillation."
             )
         return self
 
