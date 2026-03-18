@@ -532,6 +532,16 @@ class DefaultLossConfig(BaseModel):
     kl_tau: Annotated[float, Field(ge=0, description="The tau for KL divergence.")] = 1e-3
 
 
+class SDPOLossConfig(BaseModel):
+    """Config for token-level SDPO loss."""
+
+    type: Literal["sdpo"] = "sdpo"
+    is_clip: Annotated[
+        float | None,
+        Field(ge=1, description="Importance sampling clip applied to the student-vs-rollout ratio. Set to None to disable clipping."),
+    ] = 2.0
+
+
 class CustomLossConfig(BaseModel):
     """Config for a custom external loss function."""
 
@@ -541,7 +551,7 @@ class CustomLossConfig(BaseModel):
     kwargs: Annotated[dict[str, Any], Field(default_factory=dict, description="Kwargs to pass to the loss function")]
 
 
-LossConfig: TypeAlias = Annotated[DefaultLossConfig | CustomLossConfig, Field(discriminator="type")]
+LossConfig: TypeAlias = Annotated[DefaultLossConfig | SDPOLossConfig | CustomLossConfig, Field(discriminator="type")]
 
 
 class FakeDataLoaderConfig(BaseConfig):

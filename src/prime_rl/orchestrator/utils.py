@@ -1,5 +1,6 @@
 import asyncio
 import time
+from dataclasses import dataclass
 from itertools import cycle
 from pathlib import Path
 from typing import Any, AsyncContextManager
@@ -24,6 +25,16 @@ from prime_rl.utils.utils import (
 )
 
 SEMAPHORE: AsyncContextManager | None = None
+
+
+@dataclass
+class TeacherPrefillRequest:
+    """Tokenized teacher prefill request aligned back to a student sample."""
+
+    sample_index: int
+    tokens: list[int]
+    sample_prompt_len: int
+    sample_completion_len: int
 
 
 async def set_semaphore(limit: int):
@@ -150,7 +161,26 @@ async def compute_teacher_logprobs(
 ) -> list[list[float]]:
     """Compute teacher model logprobs for a batch of training samples via prefill."""
 
-    async def _compute_single(client_config: vf.ClientConfig, sample: TrainingSample) -> list[float]:
+    requests = [
+        TeacherPrefillRequest(
+            sample_index=idx,
+            tokens=sample.prompt_ids + sample.completion_ids,
+            sample_prompt_len=0,
+            sample_completion_len=len(sample.prompt_ids) + len(sample.completion_ids),
+        )
+        for idx, sample in enumerate(samples)
+    ]
+    return await compute_teacher_logprobs_for_requests(clients=clients, model_name=model_name, requests=requests)
+
+
+async def compute_teacher_logprobs_for_requests(
+    clients: list[vf.ClientConfig],
+    model_name: str,
+    requests: list[TeacherPrefillRequest],
+) -> list[list[float]]:
+    """Compute teacher logprobs for tokenized prefill requests aligned to student sample lengths."""
+
+    async def _compute_single(client_config: vf.ClientConfig, request: TeacherPrefillRequest) -> list[float]:
         client = setup_openai_client(client_config)
 
         async with await get_semaphore():
@@ -159,7 +189,7 @@ async def compute_teacher_logprobs(
                 body={
                     "model": model_name,
                     "messages": [{"role": "user", "content": ""}],
-                    "tokens": sample.prompt_ids + sample.completion_ids,
+                    "tokens": request.tokens,
                     "max_tokens": 1,
                     "temperature": 1.0,
                     "top_p": 1.0,
@@ -168,12 +198,14 @@ async def compute_teacher_logprobs(
                 },
                 cast_to=ChatCompletion,
             )
-        return [
+        logprobs = [
             0.0 if lp is None else float(next(iter(lp.values()))["logprob"])
             for lp in getattr(response, "prompt_logprobs", [])
         ]
+        sample_logprobs = logprobs[-request.sample_completion_len :] if request.sample_completion_len > 0 else []
+        return [0.0] * request.sample_prompt_len + sample_logprobs
 
-    return await asyncio.gather(*[_compute_single(client, sample) for client, sample in zip(cycle(clients), samples)])
+    return await asyncio.gather(*[_compute_single(client, request) for client, request in zip(cycle(clients), requests)])
 
 
 def get_weight_dir(output_dir: Path, step: int, check_exists: bool = True, wait_timeout: int | None = None) -> Path:

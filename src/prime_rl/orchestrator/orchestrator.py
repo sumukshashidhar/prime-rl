@@ -34,8 +34,10 @@ from prime_rl.orchestrator.ckpt import Progress, setup_ckpt_manager
 from prime_rl.orchestrator.eval_utils import evaluate_env
 from prime_rl.orchestrator.filters import apply_filters, setup_filters
 from prime_rl.orchestrator.scheduler import Scheduler
+from prime_rl.orchestrator.sdpo import build_sdpo_context, build_sdpo_teacher_requests
 from prime_rl.orchestrator.utils import (
     compute_teacher_logprobs,
+    compute_teacher_logprobs_for_requests,
     get_sampling_args,
     get_weight_dir,
     print_benchmark,
@@ -537,6 +539,7 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Collect results and assign advantages
         train_examples: list[TrainingSample] = []
+        train_example_contexts = []
         rollout_prefill_lens: list[int] = []
         rollout_decode_lens: list[int] = []
         rollout_samples_per_rollout: list[int] = []
@@ -555,6 +558,10 @@ async def orchestrate(config: OrchestratorConfig):
                     rollout_decode_tokens += sample_decode_tokens
                     rollout_prefill_tokens += sample_prefill_tokens
                     train_examples.append(sample)
+                    if config.self_distillation is not None:
+                        train_example_contexts.append(
+                            build_sdpo_context(rollout, sample, feedback_key=config.self_distillation.feedback_key)
+                        )
             else:
                 rollout_samples_per_rollout.append(0)
             rollout_prefill_lens.append(rollout_prefill_tokens)
@@ -570,16 +577,33 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Compute teacher logprobs if teacher model is configured
         teacher_logprobs_time = 0
+        sdpo_metrics: dict[str, float] = {}
         if config.teacher_model and teacher_inference_pool:
             logger.info(f"Computing teacher logprobs for {len(train_examples)} training examples")
             teacher_logprobs_start_time = time.perf_counter()
-            teacher_logprobs_list = await compute_teacher_logprobs(
-                clients=teacher_inference_pool.clients,
-                model_name=config.teacher_model.model.name,
-                samples=train_examples,
-            )
-            for train_example, teacher_logprobs in zip(train_examples, teacher_logprobs_list):
-                train_example.teacher_logprobs = teacher_logprobs
+            if config.self_distillation is None:
+                teacher_logprobs_list = await compute_teacher_logprobs(
+                    clients=teacher_inference_pool.clients,
+                    model_name=config.teacher_model.model.name,
+                    samples=train_examples,
+                )
+                for train_example, teacher_logprobs in zip(train_examples, teacher_logprobs_list):
+                    train_example.teacher_logprobs = teacher_logprobs
+            else:
+                teacher_requests, sdpo_metrics = build_sdpo_teacher_requests(
+                    samples=train_examples,
+                    contexts=train_example_contexts,
+                    tokenizer=tokenizer,
+                    config=config.self_distillation,
+                )
+                if len(teacher_requests) > 0:
+                    teacher_logprobs_list = await compute_teacher_logprobs_for_requests(
+                        clients=teacher_inference_pool.clients,
+                        model_name=config.teacher_model.model.name,
+                        requests=teacher_requests,
+                    )
+                    for request, teacher_logprobs in zip(teacher_requests, teacher_logprobs_list):
+                        train_examples[request.sample_index].teacher_logprobs = teacher_logprobs
             teacher_logprobs_time = time.perf_counter() - teacher_logprobs_start_time
             logger.debug(f"Computed teacher logprobs in {teacher_logprobs_time:.2f}s")
 
@@ -719,6 +743,7 @@ async def orchestrate(config: OrchestratorConfig):
             # W&B axis
             "step": progress.step,
         }
+        to_log.update(sdpo_metrics)
 
         # Per-env metrics
         per_env_columns = [
