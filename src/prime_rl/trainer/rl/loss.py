@@ -168,8 +168,12 @@ def sdpo_loss_fn(inputs: LossInputs, loss_config: SDPOLossConfig) -> LossOutputs
     if inputs.teacher_logprobs is None:
         raise ValueError("SDPO loss requires teacher_logprobs.")
     if not inputs.loss_mask.any():
-        zero = inputs.trainer_logprobs.new_zeros(())
-        return LossOutputs(loss=zero, metrics={"teacher_kl": zero, "sdpo_is_clipped": zero, "sdpo_target_tokens": zero})
+        loss_zero = inputs.trainer_logprobs.sum() * 0.0
+        metric_zero = inputs.trainer_logprobs.new_zeros(())
+        return LossOutputs(
+            loss=loss_zero,
+            metrics={"teacher_kl": metric_zero, "sdpo_is_clipped": metric_zero, "sdpo_target_tokens": metric_zero},
+        )
 
     log_ratio = inputs.trainer_logprobs - inputs.teacher_logprobs
     per_token_loss = log_ratio.detach() * inputs.trainer_logprobs

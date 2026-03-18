@@ -36,8 +36,9 @@ def test_sdpo_loss_applies_is_clip():
 
 
 def test_sdpo_loss_returns_zero_for_empty_target_mask():
+    trainer_logprobs = torch.tensor([-1.0], requires_grad=True)
     inputs = LossInputs(
-        trainer_logprobs=torch.tensor([-1.0]),
+        trainer_logprobs=trainer_logprobs,
         inference_logprobs=torch.tensor([-1.0]),
         teacher_logprobs=torch.tensor([-1.0]),
         advantages=torch.tensor([0.0]),
@@ -45,6 +46,9 @@ def test_sdpo_loss_returns_zero_for_empty_target_mask():
     )
 
     outputs = sdpo_loss_fn(inputs, SDPOLossConfig())
+    outputs.loss.backward()
 
     assert torch.isclose(outputs.loss, torch.tensor(0.0))
+    assert trainer_logprobs.grad is not None
+    assert torch.isclose(trainer_logprobs.grad, torch.tensor([0.0])).all()
     assert torch.isclose(outputs.metrics["sdpo_target_tokens"], torch.tensor(0.0))

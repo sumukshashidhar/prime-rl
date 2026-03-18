@@ -1,11 +1,13 @@
 from prime_rl.configs.orchestrator import SelfDistillationConfig
 from prime_rl.orchestrator.sdpo import SDPOSampleContext, build_sdpo_teacher_requests, extract_feedback
 from prime_rl.transport.types import TrainingSample
+from transformers.tokenization_utils_base import BatchEncoding
 
 
 class FakeTokenizer:
-    def __init__(self):
+    def __init__(self, return_batch_encoding: bool = False):
         self.applied_prompts: list[str] = []
+        self.return_batch_encoding = return_batch_encoding
 
     def decode(self, ids, skip_special_tokens=True):
         return "".join(chr(64 + token_id) for token_id in ids)
@@ -13,7 +15,9 @@ class FakeTokenizer:
     def apply_chat_template(self, messages, tokenize, add_generation_prompt, truncation, max_length):
         rendered = "\n".join(f"{message['role']}:{message['content']}" for message in messages)
         self.applied_prompts.append(rendered)
-        return [900 + idx for idx in range(min(len(rendered), max_length))]
+        token_ids = [900 + idx for idx in range(min(len(rendered), max_length))]
+        if self.return_batch_encoding: return BatchEncoding({"input_ids": token_ids})
+        return token_ids
 
 
 def _make_sample(completion_ids, completion_mask=None):
@@ -71,6 +75,18 @@ def test_build_sdpo_teacher_requests_uses_feedback_without_solution():
     assert "The following is feedback" in tokenizer.applied_prompts[0]
     assert "The answer format is invalid." in tokenizer.applied_prompts[0]
     assert metrics["self_distillation/feedback_used_fraction"] == 1.0
+
+
+def test_build_sdpo_teacher_requests_accepts_batch_encoding_prefix_ids():
+    tokenizer = FakeTokenizer(return_batch_encoding=True)
+    config = SelfDistillationConfig()
+    samples = [_make_sample([7, 8])]
+    contexts = [_make_context(example_id=11, reward=0.0, feedback="The answer format is invalid.")]
+
+    requests, _ = build_sdpo_teacher_requests(samples=samples, contexts=contexts, tokenizer=tokenizer, config=config)
+
+    assert len(requests) == 1
+    assert requests[0].tokens[-2:] == [7, 8]
 
 
 def test_build_sdpo_teacher_requests_disables_multiturn_samples():

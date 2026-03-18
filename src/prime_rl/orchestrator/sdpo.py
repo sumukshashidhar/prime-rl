@@ -5,6 +5,7 @@ from typing import Any
 
 import verifiers as vf
 from transformers.tokenization_utils import PreTrainedTokenizer
+from transformers.tokenization_utils_base import BatchEncoding
 
 from prime_rl.configs.orchestrator import SelfDistillationConfig
 from prime_rl.orchestrator.utils import TeacherPrefillRequest
@@ -92,6 +93,13 @@ def _disable_sample(sample: TrainingSample) -> None:
     sample.completion_mask = [False] * len(sample.completion_mask)
 
 
+def _normalize_token_ids(token_ids: list[int] | list[list[int]] | BatchEncoding) -> list[int]:
+    if isinstance(token_ids, BatchEncoding): token_ids = token_ids["input_ids"]
+    if len(token_ids) == 0: return []
+    if isinstance(token_ids[0], list): return list(token_ids[0])
+    return list(token_ids)
+
+
 def build_sdpo_teacher_requests(
     samples: list[TrainingSample],
     contexts: list[SDPOSampleContext],
@@ -170,6 +178,7 @@ def build_sdpo_teacher_requests(
             truncation=True,
             max_length=config.max_reprompt_len,
         )
+        teacher_prefix_ids = _normalize_token_ids(teacher_prefix_ids)
         requests.append(
             TeacherPrefillRequest(
                 sample_index=idx,
