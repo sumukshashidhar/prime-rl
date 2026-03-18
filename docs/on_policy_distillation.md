@@ -2,6 +2,8 @@
 
 On-policy distillation uses a teacher model to provide dense token-level feedback during RL training. The student generates rollouts, and the teacher's logprobs guide the student to stay close to stronger behavior while still learning from rewards.
 
+For SDPO-style teacher reprompting from successful sibling rollouts and environment feedback, see [SDPO](sdpo.md).
+
 For more details, see [On-Policy Distillation](https://thinkingmachines.ai/blog/on-policy-distillation/) by Thinking Machines.
 
 ## Quick Start
