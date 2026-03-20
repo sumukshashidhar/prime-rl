@@ -17,6 +17,9 @@ from prime_rl.configs.orchestrator import (
 from prime_rl.configs.orchestrator import (
     OrchestratorConfig,
 )
+from prime_rl.configs.orchestrator import (
+    SelfDistillationConfig,
+)
 from prime_rl.configs.shared import (
     SlurmConfig,
     WandbConfig,
@@ -340,12 +343,16 @@ class RLConfig(BaseConfig):
 
     @model_validator(mode="after")
     def validate_teacher_model(self):
-        if (
+        loss_needs_teacher = (
             self.trainer.loss.type == "default" and self.trainer.loss.teacher_tau > 0
-        ) and not self.orchestrator.teacher_model:
+        ) or self.trainer.loss.type == "sdpo"
+        teacher_will_be_autostarted = (
+            self.deployment.type == "single_node" and (self.deployment.num_teacher_gpus or 0) > 0
+        ) or self.teacher_inference is not None
+        if loss_needs_teacher and not self.orchestrator.teacher_model and not teacher_will_be_autostarted:
             raise ValueError(
-                "teacher_model must be configured when teacher_tau > 0. "
-                "Either set teacher_tau = 0, set deployment.num_teacher_gpus, or configure teacher_model manually."
+                "teacher_model must be configured when the trainer loss uses teacher logprobs. "
+                "Either configure orchestrator.teacher_model manually, set deployment.num_teacher_gpus, or configure teacher_inference."
             )
         return self
 
@@ -729,6 +736,18 @@ class RLConfig(BaseConfig):
         self.orchestrator.teacher_model.client.base_url = [f"http://{host}:{port}/v1"]
         self.orchestrator.teacher_model.model.name = self.teacher_inference.model.name
 
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_sdpo(self):
+        if self.trainer.loss.type != "sdpo":
+            return self
+        if self.orchestrator.self_distillation is None:
+            self.orchestrator.self_distillation = SelfDistillationConfig()
+        if self.orchestrator.teacher_model is None:
+            raise ValueError(
+                "SDPO requires a teacher model. Configure orchestrator.teacher_model directly, or set deployment.num_teacher_gpus / teacher_inference."
+            )
         return self
 
     @model_validator(mode="after")

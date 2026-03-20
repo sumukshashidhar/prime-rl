@@ -1,0 +1,39 @@
+max_steps = 100
+seq_len = 2048
+
+[deployment]
+gpus_per_node = 3
+num_train_gpus = 1
+num_infer_gpus = 1
+num_teacher_gpus = 1
+
+[wandb]
+project = "gsm8k-debug"
+name = "gsm8k-sdpo"
+
+[model]
+name = "PrimeIntellect/Qwen3-0.6B"
+
+[orchestrator]
+batch_size = 512
+rollouts_per_example = 16
+
+[orchestrator.sampling]
+max_tokens = 2048
+
+[orchestrator.self_distillation]
+success_reward_threshold = 0.5
+feedback_key = "feedback"
+
+[[orchestrator.env]]
+id = "math-env"
+name = "gsm8k"
+args = { dataset_name = "openai/gsm8k", dataset_subset = "main", math_verify_max_workers = 128, math_verify_timeout = 60 }
+
+[trainer.loss]
+type = "sdpo"
+is_clip = 2.0
+
+[trainer] # Default trainer config
+
+[inference] # Default inference config

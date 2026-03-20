@@ -6,6 +6,7 @@ This directory maintains the documentation for PRIME-RL. It is organized into th
 - [**Configs**](configs.md) - Configuration system using TOML files, CLI arguments, and environment variables
 - [**Environments**](environments.md) - Installing and using verifiers environments from the Environments Hub
 - [**Async Training**](async.md) - Understanding asynchronous off-policy training and step semantics
+- [**SDPO**](sdpo.md) - Self-distilled policy optimization with teacher reprompting and feedback-aware distillation
 - [**Logging**](logging.md) - Logging with loguru, torchrun, and Weights & Biases
 - [**MultiRunManager**](multi_run_manager.md) - Multi-run training with the MultiRunManager object for concurrent LoRA adapters
 - [**Checkpointing**](checkpointing.md) - Saving and resuming training from checkpoints

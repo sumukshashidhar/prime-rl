@@ -230,8 +230,10 @@ def rl_local(config: RLConfig):
             monitor_thread.start()
             monitor_threads.append(monitor_thread)
         elif (
-            config.trainer.loss.type == "default" and config.trainer.loss.teacher_tau > 0
-        ) or config.orchestrator.teacher_model:
+            (config.trainer.loss.type == "default" and config.trainer.loss.teacher_tau > 0)
+            or config.trainer.loss.type == "sdpo"
+            or config.orchestrator.teacher_model
+        ):
             logger.warning(
                 "No teacher_inference config specified, skipping starting teacher inference server. "
                 "Is your teacher inference server running? Make sure orchestrator.teacher_model is configured."

@@ -6,7 +6,7 @@ from beartype import beartype as typechecker
 from jaxtyping import Bool, Float, Int, jaxtyped
 from torch import Tensor
 
-from prime_rl.configs.trainer import CustomLossConfig, DefaultLossConfig, LossConfig
+from prime_rl.configs.trainer import CustomLossConfig, DefaultLossConfig, LossConfig, SDPOLossConfig
 from prime_rl.utils.utils import import_object
 
 
@@ -163,6 +163,37 @@ def default_loss_fn(inputs: LossInputs, loss_config: DefaultLossConfig) -> LossO
     return LossOutputs(loss=loss, metrics=metrics)
 
 
+def sdpo_loss_fn(inputs: LossInputs, loss_config: SDPOLossConfig) -> LossOutputs:
+    """Token-level reverse-KL SDPO loss with optional IS clipping against rollout logprobs."""
+    if inputs.teacher_logprobs is None:
+        raise ValueError("SDPO loss requires teacher_logprobs.")
+    if not inputs.loss_mask.any():
+        loss_zero = inputs.trainer_logprobs.sum() * 0.0
+        metric_zero = inputs.trainer_logprobs.new_zeros(())
+        return LossOutputs(
+            loss=loss_zero,
+            metrics={"teacher_kl": metric_zero, "sdpo_is_clipped": metric_zero, "sdpo_target_tokens": metric_zero},
+        )
+
+    log_ratio = inputs.trainer_logprobs - inputs.teacher_logprobs
+    per_token_loss = log_ratio.detach() * inputs.trainer_logprobs
+    if loss_config.is_clip is not None:
+        negative_approx_kl = (inputs.trainer_logprobs - inputs.inference_logprobs).detach().clamp(min=-20.0, max=20.0)
+        ratio = torch.exp(negative_approx_kl).clamp(max=loss_config.is_clip)
+        per_token_loss = per_token_loss * ratio
+        is_clipped = ratio == loss_config.is_clip
+    else:
+        is_clipped = torch.zeros_like(inputs.loss_mask, dtype=torch.bool)
+    teacher_kl = inputs.teacher_logprobs - inputs.trainer_logprobs
+    loss = per_token_loss[inputs.loss_mask].sum()
+    metrics = {
+        "teacher_kl": _safe_mean(teacher_kl, inputs.loss_mask),
+        "sdpo_is_clipped": _safe_mean(is_clipped, inputs.loss_mask),
+        "sdpo_target_tokens": inputs.loss_mask.float().sum(),
+    }
+    return LossOutputs(loss=loss, metrics=metrics)
+
+
 def setup_loss_fn(loss_config: LossConfig) -> LossFn:
     """Setup the loss function based on config."""
     if isinstance(loss_config, CustomLossConfig):
@@ -171,6 +202,11 @@ def setup_loss_fn(loss_config: LossConfig) -> LossFn:
 
         def loss_fn(inputs: LossInputs) -> LossOutputs:
             return custom_fn(inputs, **kwargs)
+
+        return loss_fn
+    if isinstance(loss_config, SDPOLossConfig):
+        def loss_fn(inputs: LossInputs) -> LossOutputs:
+            return sdpo_loss_fn(inputs, loss_config)
 
         return loss_fn
 

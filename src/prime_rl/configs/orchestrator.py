@@ -663,6 +663,51 @@ class TeacherModelConfig(BaseConfig):
     ] = ModelConfig()
 
 
+class SelfDistillationConfig(BaseConfig):
+    """Configures SDPO-style self-distillation prompt construction in the orchestrator."""
+
+    success_reward_threshold: Annotated[
+        float,
+        Field(description="Minimum rollout reward required for a completion to be reused as a demonstration."),
+    ] = 0.5
+    max_reprompt_len: Annotated[
+        int,
+        Field(ge=1, description="Maximum length of the reprompted teacher prefix before appending the sampled completion."),
+    ] = 10_240
+    dont_reprompt_on_self_success: Annotated[
+        bool,
+        Field(description="If True, a successful sample cannot reuse its own completion as the demonstration."),
+    ] = True
+    remove_thinking_from_demonstration: Annotated[
+        bool,
+        Field(description="If True, strip <think>...</think> traces from reused demonstrations before reprompting."),
+    ] = True
+    include_environment_feedback: Annotated[
+        bool,
+        Field(description="Whether to include textual environment feedback when building teacher prompts."),
+    ] = True
+    environment_feedback_only_without_solution: Annotated[
+        bool,
+        Field(description="If True, only include feedback when no successful demonstration is available."),
+    ] = True
+    feedback_key: Annotated[
+        str,
+        Field(description="Key used to look for textual feedback on the rollout or the last trajectory step extras."),
+    ] = "feedback"
+    reprompt_template: Annotated[
+        str,
+        Field(description="Template used to build the reprompt. Available fields: prompt, solution, feedback."),
+    ] = "{prompt}{solution}{feedback}\n\nCorrectly solve the original question."
+    solution_template: Annotated[
+        str,
+        Field(description="Template used to render a successful prior attempt. Available field: successful_previous_attempt."),
+    ] = "\n\nCorrect solution:\n\n{successful_previous_attempt}"
+    feedback_template: Annotated[
+        str,
+        Field(description="Template used to render environment feedback. Available field: feedback_raw."),
+    ] = "\n\nThe following is feedback from your unsuccessful earlier attempt:\n\n{feedback_raw}"
+
+
 class OrchestratorConfig(BaseConfig):
     """Configures the orchestrator for RL training."""
 
@@ -682,6 +727,13 @@ class OrchestratorConfig(BaseConfig):
             description="The teacher model configuration for computing teacher logprobs (e.g. for distillation). "
             "If provided, teacher logprobs will be computed using the specified model. "
             "If None, no teacher model will be used."
+        ),
+    ] = None
+
+    self_distillation: Annotated[
+        SelfDistillationConfig | None,
+        Field(
+            description="Optional SDPO-style self-distillation prompt construction. When set, the orchestrator will reprompt the teacher with successful demonstrations and optional feedback."
         ),
     ] = None
 
